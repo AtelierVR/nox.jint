@@ -1,0 +1,13 @@
+<ui:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:VisualElement style="height: 50px; background-color: rgb(255, 215, 0);">
+        <ui:Label text="JS" style="flex-shrink: 1; flex-grow: 1; -unity-text-align: lower-right; color: rgb(0, 0, 0); -unity-font-style: bold; font-size: 24px; padding-top: 0; padding-right: 4px; padding-bottom: 0; padding-left: 0;" />
+    </ui:VisualElement>
+    <ui:VisualElement style="margin-top: 16px; margin-right: 8px; margin-bottom: 8px; margin-left: 8px;">
+        <uie:ObjectField label="File" type="Nox.CCK.Jint.JintFile, Nox.CCK.Jint" name="script" />
+    </ui:VisualElement>
+    <ui:VisualElement style="margin-top: 16px; margin-right: 8px; margin-bottom: 8px; margin-left: 8px;">
+        <ui:MultiColumnListView name="exports-list" show-add-remove-footer="true" header-title="Exports" show-foldout-header="true" virtualization-method="DynamicHeight" show-border="true">
+            <ui:Columns />
+        </ui:MultiColumnListView>
+    </ui:VisualElement>
+</ui:UXML>

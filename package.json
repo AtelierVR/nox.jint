@@ -1,0 +1,6 @@
+﻿{
+  "name": "nox.jint",
+  "displayName": "Nox - Jint",
+  "version": "1.0.0",
+  "description": "JavaScript engine (Jint) runtime integration and scripting API."
+}

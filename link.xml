@@ -1,0 +1,5 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<linker>
+    <assembly fullname="Nox.Mods.Jint" preserve="all" />
+    <assembly fullname="Nox.Jint.Runtime" preserve="all" />
+</linker>

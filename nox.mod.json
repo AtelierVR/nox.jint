@@ -1,0 +1,35 @@
+﻿{
+  "type": "mod",
+  "id": "nox.jint",
+  "provides": [
+    "fr.hactazia.jint",
+    "jint"
+  ],
+  "name": "Jint",
+  "version": "1.0.0",
+  "description": "JavaScript engine (Jint) runtime integration and scripting API.",
+  "license": "GPL-3.0",
+  "icon": null,
+  "contact": {
+    "email": "hactazia@gmail.com",
+    "source": "https://github.com/AtelierVR/nox.jint",
+    "website": "https://nox.hactazia.fr/",
+    "issues": "https://github.com/AtelierVR/nox.jint/issues"
+  },
+  "authors": [
+    {
+      "name": "Hactazia",
+      "email": "hactazia@gmail.com",
+      "website": "https://hactazia.fr/"
+    }
+  ],
+  "contributors": [],
+  "relations": [],
+  "entrypoints": {
+    "main": [
+      "nox.jint.Main"
+    ]
+  },
+  "references": [],
+  "permissions": []
+}

@@ -1,0 +1,20 @@
+{
+    "name": "Nox.Jint",
+    "rootNamespace": "",
+    "references": [
+        "Nox.CCK",
+        "Nox.Scripting"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Jint.dll",
+        "Esprima.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
