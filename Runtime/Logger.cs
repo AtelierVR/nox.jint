@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	public class Logger {
 		public readonly List<Log>  Logs = new();
 		public          UnityEvent OnLog;

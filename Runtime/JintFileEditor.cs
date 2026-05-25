@@ -3,7 +3,7 @@ using Nox.CCK.Jint;
 using UnityEditor;
 using UnityEngine;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	[CustomEditor(typeof(JintFile))]
 	public class JintFileEditor : Editor {
 		public override void OnInspectorGUI() {

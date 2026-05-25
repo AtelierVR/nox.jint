@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	public class Manager {
 		private List<JintBacking> _backings = new();
 

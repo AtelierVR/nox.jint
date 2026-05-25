@@ -18,7 +18,7 @@ using Jint.Native.Array;
 using Jint.Runtime.Modules;
 using Nox.CCK.Utils;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	public static class JintTypeAdapter {
 		public static ObjectInstance BuildInstance(
 			JintEngine              engine,

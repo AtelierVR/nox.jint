@@ -17,7 +17,7 @@ using Nox.Scripting;
 using JintEngine = Jint.Engine;
 using NoxLogger = Nox.CCK.Utils.Logger;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	/// <summary>
 	/// Adapts <see cref="IScriptingModuleDefinition"/> instances from the
 	/// scripting registry into Jint engine modules.

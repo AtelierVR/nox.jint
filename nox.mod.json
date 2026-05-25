@@ -23,13 +23,9 @@
       "website": "https://hactazia.fr/"
     }
   ],
-  "contributors": [],
-  "relations": [],
   "entrypoints": {
     "main": [
-      "nox.jint.Main"
+      "Nox.Jint.Runtime.Main"
     ]
   },
-  "references": [],
-  "permissions": []
 }

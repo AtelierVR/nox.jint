@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEngine.UIElements;
 using Object = UnityEngine.Object;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	public class ExportEntry {
 		public string Key;
 		public object Value;

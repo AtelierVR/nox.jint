@@ -15,7 +15,7 @@ using LogType = UnityEngine.LogType;
 using Transform = UnityEngine.Transform;
 using NoxLogger = Nox.CCK.Utils.Logger;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	[RequireComponent(typeof(JintScript))]
 	public class JintBacking : MonoBehaviour, IJintBacking, ICompilable {
 		public Engine Engine;

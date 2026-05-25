@@ -6,7 +6,7 @@ using Nox.Jint;
 using Nox.Scripting;
 using UnityEngine.Events;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	public class Main : IMainModInitializer, IJintAPI {
 		public        Manager     Manager;
 		public static Main        Instance;

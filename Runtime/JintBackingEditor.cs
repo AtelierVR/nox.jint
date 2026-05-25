@@ -4,7 +4,7 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	[CustomEditor(typeof(JintBacking))]
 	public class JintBackingEditor : Editor {
 		public override void OnInspectorGUI() {

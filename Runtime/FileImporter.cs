@@ -5,7 +5,7 @@ using UnityEditor.AssetImporters;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-namespace api.nox.jint {
+namespace Nox.Jint.Runtime {
 	[ScriptedImporter(1, "js")]
 	public class FileImporter : ScriptedImporter {
 		public override void OnImportAsset(AssetImportContext ctx) {
