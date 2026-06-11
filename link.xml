@@ -6,5 +6,4 @@
 	<assembly fullname="Nox.CCK.Jint" preserve="all" />
 	<assembly fullname="Nox.Jint" preserve="all" />
 	<assembly fullname="Nox.Jint.Runtime" preserve="all" />
-	<assembly fullname="Nox.Mods.Jint" preserve="all" />
 </linker>
