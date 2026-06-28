@@ -17,6 +17,7 @@ using Cysharp.Threading.Tasks;
 using Jint.Native.Array;
 using Jint.Runtime.Modules;
 using Nox.CCK.Utils;
+using System.Collections;
 
 namespace Nox.Jint.Runtime {
 	public static class JintTypeAdapter {
@@ -217,6 +218,18 @@ namespace Nox.Jint.Runtime {
 			return arr;
 		}
 
+		private static JsValue ToEnumerable(JintEngine engine, System.Collections.IEnumerable enumerable, IJintScriptingContext context) {
+			var items = new List<object>();
+			foreach (var item in enumerable)
+				items.Add(item);
+			if (items.Count == 0)
+				return engine.Intrinsics.Array.Construct(0);
+			var arr = engine.Intrinsics.Array.Construct((uint)items.Count);
+			for (var i = 0; i < items.Count; i++)
+				arr[(uint)i] = ToValue(engine, items[i], context);
+			return arr;
+		}
+
 		public static JsValue ToValue(JintEngine engine, object value, IJintScriptingContext context = null)
 			=> value switch {
 				JsValue v                                             => v,
@@ -239,6 +252,12 @@ namespace Nox.Jint.Runtime {
 			var t = value.GetType();
 			if (t.IsPrimitive || t == typeof(string) || t.IsEnum || t.IsValueType)
 				return JsValue.FromObject(engine, value);
+			// Arrays & collections → JS Array (must precede Unity Object and
+			// reflective fallback, otherwise .NET collections lose forEach/map/filter in JS).
+			if (t.IsArray)
+				return ToArray(engine, (Array)value, context);
+			if (value is IEnumerable enumerable)
+				return ToEnumerable(engine, enumerable, context);
 			// Unity Objects without a registered converter: wrap via ObjectWrapper so the
 			// script can still read/write native properties (e.g. TMP_Text.text, Image.color).
 			if (value is UnityEngine.Object)
