@@ -226,8 +226,8 @@ namespace Nox.Jint.Runtime {
 				Task<object> t                                        => ToPromise(engine, t.AsUniTask(), context),
 				UniTask<object> { Status: UniTaskStatus.Succeeded } t => ToValue(engine, t.GetAwaiter().GetResult(), context),
 				UniTask<object> t                                     => ToPromise(engine, t, context),
-				_ when value.GetType().IsArray                        => ToArray(engine, (Array)value, context),
 				_ when context != null                                => ToValueViaContext(engine, value, context),
+				_ when value.GetType().IsArray                        => ToArray(engine, (Array)value, context),
 				_                                                     => JsValue.FromObject(engine, value)
 			};
 
