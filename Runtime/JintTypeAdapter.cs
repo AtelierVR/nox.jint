@@ -29,6 +29,8 @@ namespace Nox.Jint.Runtime {
 		) {
 			var obj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
 			obj.DefineOwnProperty("Name", new PropertyDescriptor(converter.HandledType.Name, writable: false, enumerable: false, configurable: false));
+			// Store the original .NET instance so FromJsValue can unwrap it back
+			obj.DefineOwnProperty("__target", new PropertyDescriptor(JsValue.FromObject(engine, instance), writable: false, enumerable: false, configurable: false));
 			try {
 				foreach (var binding in converter.Bindings) {
 					var name = binding.Name.Resolve(NameResolver.camelCaseStyle);
@@ -388,6 +390,10 @@ namespace Nox.Jint.Runtime {
 			}
 			if (obj is ObjectWrapper wrapper)
 				return wrapper.Target;
+			// Unwrap objects created by BuildInstance (type converters) via __target
+			var targetProp = obj.Get("__target");
+			if (targetProp?.IsUndefined() == false && !targetProp.IsNull())
+				return FromJsValue(targetProp);
 			return obj;
 		}
 	}
