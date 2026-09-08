@@ -8,7 +8,6 @@ using Jint.Native.Object;
 using Jint.Runtime.Descriptors;
 using Jint.Runtime.Interop;
 using Nox.CCK.Scripting;
-using Nox.Jint;
 using Nox.Scripting;
 using JintEngine = Jint.Engine;
 using NoxLogger = Nox.CCK.Utils.Logger;
@@ -18,6 +17,7 @@ using Jint.Native.Array;
 using Jint.Runtime.Modules;
 using Nox.CCK.Utils;
 using System.Collections;
+using Newtonsoft.Json.Linq;
 
 namespace Nox.Jint.Runtime {
 	public static class JintTypeAdapter {
@@ -63,7 +63,7 @@ namespace Nox.Jint.Runtime {
 						case IScriptingTypeAsyncMethod method: {
 							var fn = new ClrFunction(engine, name, (_, args) => {
 								var          nativeArgs = ConvertArgs(args);
-								Task<object> task;
+								UniTask<object> task;
 								try { task = method.Handler(ctx, instance, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"[scripting] {converter.HandledType.Name}.{name}: {e.Message}");
 									return JsValue.Null;
@@ -120,7 +120,7 @@ namespace Nox.Jint.Runtime {
 							var name = binding.Name.Resolve(NameResolver.camelCaseStyle);
 							var fn   = new ClrFunction(engine, name, (_, args) => {
 								var          nativeArgs = ConvertArgs(args);
-								Task<object> task;
+								UniTask<object> task;
 								try { task = method.Handler(ctx, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"[scripting] {module.Id.Resolve(NameResolver.snake_case_style)}.{name}: {e.Message}");
 									return JsValue.Null;
@@ -193,7 +193,7 @@ namespace Nox.Jint.Runtime {
 						case IScriptingTypeAsyncMethod method: {
 							var asyncFn = new ClrFunction(engine, name, (_, args) => {
 								var          nativeArgs = ConvertArgs(args);
-								Task<object> task;
+								UniTask<object> task;
 								try { task = method.Handler(ctx, null, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"[scripting] {converter.HandledType.Name}.{name}: {e.Message}");
 									return JsValue.Null;
@@ -232,19 +232,65 @@ namespace Nox.Jint.Runtime {
 			return arr;
 		}
 
+		/// <summary>
+		/// Convert a Newtonsoft <see cref="JObject"/> into a plain JS object whose own
+		/// properties mirror the JSON fields, recursively converting every value
+		/// (nested objects, arrays, and scalars).
+		/// </summary>
+		private static JsValue ToJsonObject(JintEngine engine, JObject jo, IJintScriptingContext context) {
+			var obj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
+			foreach (var prop in jo.Properties())
+				obj.Set(prop.Name, ToValue(engine, prop.Value, context), true);
+			return obj;
+		}
+
+		/// <summary>
+		/// Convert a Newtonsoft <see cref="JArray"/> into a JS array, recursively
+		/// converting every element (nested objects, arrays, and scalars).
+		/// </summary>
+		private static JsValue ToJsonArray(JintEngine engine, JArray ja, IJintScriptingContext context) {
+			var arr = engine.Intrinsics.Array.Construct((uint)ja.Count);
+			for (var i = 0; i < ja.Count; i++)
+				arr[(uint)i] = ToValue(engine, ja[i], context);
+			return arr;
+		}
+
+		/// <summary>
+		/// Convert a string-keyed dictionary into a plain JS object whose own properties
+		/// mirror the dictionary entries, recursively converting every value.
+		/// </summary>
+		private static JsValue ToStringKeyedObject(JintEngine engine, IDictionary<string, object> dict, IJintScriptingContext context) {
+			var obj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
+			foreach (var kv in dict)
+				obj.Set(kv.Key, ToValue(engine, kv.Value, context), true);
+			return obj;
+		}
+
 		public static JsValue ToValue(JintEngine engine, object value, IJintScriptingContext context = null)
 			=> value switch {
-				JsValue v                                             => v,
-				bool b                                                => b ? JsBoolean.True : JsBoolean.False,
 				null                                                  => JsValue.Null,
+				bool b                                                => b ? JsBoolean.True : JsBoolean.False,
+
+				JsValue v                                             => v,
+        		JObject jo                                            => ToJsonObject(engine, jo, context),
+        		JArray ja                                             => ToJsonArray(engine, ja, context),
+        		JValue jv                                             => ToValue(engine, jv.Value, context),
+        		JToken jt                                             => ToValue(engine, jt.ToString(), context),
+        
 				Task<object> { IsCompleted: true } t                  => (t.IsFaulted || t.IsCanceled) ? JsValue.Null : ToValue(engine, t.GetAwaiter().GetResult(), context),
 				Task<object> t                                        => ToPromise(engine, t.AsUniTask(), context),
 				UniTask<object> { Status: UniTaskStatus.Succeeded } t => ToValue(engine, t.GetAwaiter().GetResult(), context),
 				UniTask<object> t                                     => ToPromise(engine, t, context),
+
 				_ when context != null                                => ToValueViaContext(engine, value, context),
 				_ when value.GetType().IsArray                        => ToArray(engine, (Array)value, context),
-				_                                                     => JsValue.FromObject(engine, value)
+				_                                                     => Fallback(engine, value, context)
 			};
+		
+		private static JsValue Fallback(JintEngine engine, object value, IJintScriptingContext context = null) {
+            NoxLogger.LogWarning($"{engine.GetType().FullName} can be make errors.", tag: nameof(JintTypeAdapter));
+			return JsValue.FromObject(engine, value);
+		}
 
 		private static JsValue ToValueViaContext(JintEngine engine, object value, IJintScriptingContext context) {
 			var converted = context.ToScript(value);
@@ -254,6 +300,11 @@ namespace Nox.Jint.Runtime {
 			var t = value.GetType();
 			if (t.IsPrimitive || t == typeof(string) || t.IsEnum || t.IsValueType)
 				return JsValue.FromObject(engine, value);
+			// String-keyed dictionaries → plain JS object (key/value own properties),
+			// so parsed JSON bodies and Dictionary-returning APIs render as objects
+			// instead of being caught by the IEnumerable → Array branch below.
+			if (value is IDictionary<string, object> stringDict)
+				return ToStringKeyedObject(engine, stringDict, context);
 			// Arrays & collections → JS Array (must precede Unity Object and
 			// reflective fallback, otherwise .NET collections lose forEach/map/filter in JS).
 			if (t.IsArray)
@@ -262,6 +313,7 @@ namespace Nox.Jint.Runtime {
 				return ToEnumerable(engine, enumerable, context);
 			// Unity Objects without a registered converter: wrap via ObjectWrapper so the
 			// script can still read/write native properties (e.g. TMP_Text.text, Image.color).
+            NoxLogger.LogWarning($"{engine.GetType().FullName} can be make errors.", tag: nameof(JintTypeAdapter));
 			if (value is UnityEngine.Object)
 				return ObjectWrapper.Create(engine, value, value.GetType());
 			return BuildReflective(engine, value, context);
@@ -394,7 +446,8 @@ namespace Nox.Jint.Runtime {
 			var targetProp = obj.Get("__target");
 			if (targetProp?.IsUndefined() == false && !targetProp.IsNull())
 				return FromJsValue(targetProp);
-			return obj;
+			// Plain JS object → live PropertyDictionary view (no recursion, no copy).
+			return new PropertyDictionary(obj.Engine, obj);
 		}
 	}
 }

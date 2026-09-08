@@ -1,21 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
-using Jint;
-using Jint.Native;
-using Jint.Native.Array;
 using Jint.Native.Object;
-using Jint.Runtime;
-using Jint.Runtime.Descriptors;
-using Jint.Runtime.Interop;
-using Nox.CCK.Scripting;
-using Nox.CCK.Utils;
-using Nox.Jint;
 using Nox.Scripting;
-using JintEngine = Jint.Engine;
-using NoxLogger = Nox.CCK.Utils.Logger;
 
 namespace Nox.Jint.Runtime {
 	/// <summary>
@@ -52,9 +41,9 @@ namespace Nox.Jint.Runtime {
 				case string s:
 					return s;
 				case double d:
-					return d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+					return d.ToString(CultureInfo.InvariantCulture);
 				case float f:
-					return f.ToString(System.Globalization.CultureInfo.InvariantCulture);
+					return f.ToString(CultureInfo.InvariantCulture);
 				case int i:
 					return i.ToString();
 				case object[] arr: {
