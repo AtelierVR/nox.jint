@@ -1,4 +1,3 @@
-using Nox.Jint;
 using UnityEngine;
 
 namespace Nox.CCK.Jint {

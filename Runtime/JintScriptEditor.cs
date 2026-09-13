@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Nox.CCK.Jint;
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -85,67 +86,66 @@ namespace Nox.Jint.Runtime {
 				},
 				bindCell = (element, index) => {
 					if (_entries == null || index < 0 || index >= _entries.Count) return;
-					var item = _entries[index];
-					if (item?.Key == null) return;
+					var item  = _entries[index];
 					var field = (TextField)element;
-					field.SetValueWithoutNotify(item.Key);
+					field.SetValueWithoutNotify(item.Key ?? string.Empty);
 					field.userData = index;
 				}
 			};
 
-
-			var typeValues = new List<Type> {
-				typeof(string),
-				typeof(int),
-				typeof(float),
-				typeof(bool),
-				typeof(Object),
-				typeof(GameObject),
-				typeof(Transform),
-				typeof(TMPro.TextMeshProUGUI),
-				typeof(Collider),
-			};
-
+			// Type column
 			var typeColumn = new Column {
 				name        = "type",
 				title       = "Type",
-				width       = 120,
-				minWidth    = 80,
+				width       = 160,
+				minWidth    = 120,
 				stretchable = false,
 				sortable    = true,
 				makeCell = () => {
-					var dropdown = new DropdownField {
-						choices = typeValues.Select(t => t.Name).ToList(),
+					var row = new VisualElement {
 						style = {
-							marginRight = 5,
-							marginTop   = 4
+							flexDirection = FlexDirection.Row,
+							alignItems    = Align.Center,
+							marginRight   = 5,
+							marginTop     = 4
 						}
 					};
-					dropdown.RegisterValueChangedCallback(
-						evt => {
-							var dropdownElement = (DropdownField)evt.target;
-							var selectedIndex   = dropdownElement.choices.IndexOf(evt.newValue);
-							if (selectedIndex < 0 || selectedIndex >= typeValues.Count) return;
-							var actualValue = typeValues[selectedIndex];
-							var changeEvent = ChangeEvent<string>.GetPooled(evt.previousValue, actualValue.AssemblyQualifiedName);
-							changeEvent.target = evt.target;
-							OnTypeChanged(changeEvent);
+
+					var typeButton = new Button {
+						style = {
+							flexGrow      = 1,
+							unityTextAlign = TextAnchor.MiddleLeft
 						}
-					);
-					return dropdown;
+					};
+					var arrayToggle = new Toggle {
+						tooltip = "Exporter un tableau (array) de ce type",
+						style   = { marginLeft = 4 }
+					};
+
+					typeButton.clicked += () => {
+						if (row.userData is int idx) OpenTypeSearchWindow(typeButton, idx);
+					};
+					arrayToggle.RegisterValueChangedCallback(evt => {
+						if (row.userData is int idx) SetArrayFlag(idx, evt.newValue);
+					});
+
+					row.Add(typeButton);
+					row.Add(arrayToggle);
+					return row;
 				},
 				bindCell = (element, index) => {
 					if (_entries == null || index < 0 || index >= _entries.Count) return;
 					var item = _entries[index];
-					if (item?.Type == null) return;
-					var dropdown = (DropdownField)element;
+					element.userData = index;
 
-					var typeIndex = typeValues.FindIndex(t => t == item.Type);
-					if (typeIndex >= 0 && typeIndex < dropdown.choices.Count)
-						dropdown.SetValueWithoutNotify(dropdown.choices[typeIndex]);
-					else dropdown.SetValueWithoutNotify(nameof(Object));
+					var typeButton  = element.Q<Button>();
+					var arrayToggle = element.Q<Toggle>();
 
-					dropdown.userData = index;
+					var isArray     = item.Type is { IsArray: true };
+					var elementType = isArray ? item.Type.GetElementType() : item.Type;
+
+					typeButton.text = elementType?.Name ?? "<null>";
+					arrayToggle.SetValueWithoutNotify(isArray);
 				}
 			};
 
@@ -153,23 +153,19 @@ namespace Nox.Jint.Runtime {
 			var valueColumn = new Column {
 				name        = "value",
 				title       = "Value",
-				width       = 150,
-				minWidth    = 100,
+				width       = 220,
+				minWidth    = 140,
 				stretchable = true,
 				sortable    = false,
-				makeCell = () => {
-					var container = new VisualElement {
-						style = {
-							marginRight = 5,
-							marginTop   = 4
-						}
-					};
-					return container;
+				makeCell = () => new VisualElement {
+					style = {
+						marginRight = 5,
+						marginTop   = 4
+					}
 				},
 				bindCell = (element, index) => {
 					if (_entries == null || index < 0 || index >= _entries.Count) return;
 					var item = _entries[index];
-					if (item == null) return;
 					element.Clear();
 					element.Add(CreateValueField(item.Value, item.Type, index));
 				}
@@ -185,163 +181,276 @@ namespace Nox.Jint.Runtime {
 
 		private void OnKeyChanged(ChangeEvent<string> evt) {
 			var field = (TextField)evt.target;
-			var index = (int)field.userData;
+			if (field.userData is not int index || _entries == null || index < 0 || index >= _entries.Count) return;
 
-			if (_entries == null || index < 0 || index >= _entries.Count) return;
+			var newKey      = evt.newValue?.Trim();
+			var isDuplicate = _entries.Where((_, i) => i != index).Any(e => e.Key == newKey);
 
-			if (string.IsNullOrWhiteSpace(evt.newValue) || _entries.Any(item => item.Key == evt.newValue && _entries.IndexOf(item) != index)) {
+			if (string.IsNullOrEmpty(newKey) || isDuplicate) {
 				field.SetValueWithoutNotify(evt.previousValue);
 				return;
 			}
 
-			var oldKey = _entries[index].Key;
-			_entries[index].Key = evt.newValue;
-
-			// Update dictionary
-			var dict = Module.GetExports();
-			dict.Remove(oldKey);
-			dict[evt.newValue] = _entries[index].Value;
-			Module.SetExports(dict);
-
-			EditorUtility.SetDirty(Module);
+			_entries[index].Key = newKey;
+			PersistEntries();
 		}
 
-		private void OnTypeChanged(ChangeEvent<string> evt) {
-			var dropdown = (DropdownField)evt.target;
-			var index    = (int)dropdown.userData;
+		private void OpenTypeSearchWindow(VisualElement anchor, int index) {
+			var window = new TypeSearchWindow(
+				new AdvancedDropdownState(),
+				selectedType => SetEntryElementType(index, selectedType)
+			);
+			window.Show(anchor.worldBound);
+		}
 
+		private void SetEntryElementType(int index, Type newElementType) {
 			if (_entries == null || index < 0 || index >= _entries.Count) return;
 
-			var newType = Type.GetType(evt.newValue) ?? typeof(string);
+			var wasArray = _entries[index].Type is { IsArray: true };
+			var newType  = wasArray ? newElementType.MakeArrayType() : newElementType;
 
-			_entries[index].Type = newType;
-			_entries[index].Value = newType == typeof(string)
-				? string.Empty
-				: newType.IsValueType
-					? Activator.CreateInstance(newType)
-					: null;
+			_entries[index].Type  = newType;
+			_entries[index].Value = CreateDefaultValue(newType);
 
-			var dict = Module.GetExports();
-			dict[_entries[index].Key] = _entries[index].Value;
+			PersistEntries();
+			_exportsListView?.RefreshItem(index);
+		}
 
+		private void SetArrayFlag(int index, bool isArray) {
+			if (_entries == null || index < 0 || index >= _entries.Count) return;
 
-			Module.SetExports(dict);
-			EditorUtility.SetDirty(Module);
-			_exportsListView.RefreshItem(index);
+			var currentType = _entries[index].Type;
+			var wasArray    = currentType is { IsArray: true };
+			
+			if (wasArray == isArray) return;
+
+			var elementType = wasArray ? currentType.GetElementType() : currentType;
+			elementType ??= typeof(string);
+
+			var newType       = isArray ? elementType.MakeArrayType() : elementType;
+			var currentValue  = _entries[index].Value;
+			object newValue;
+
+			if (isArray) {
+				var arr = Array.CreateInstance(elementType, 1);
+				arr.SetValue(currentValue ?? CreateDefaultScalarValue(elementType), 0);
+				newValue = arr;
+			} else {
+				if (currentValue is Array { Length: > 0 } existingArray) {
+					newValue = existingArray.GetValue(0);
+				} else {
+					newValue = CreateDefaultScalarValue(elementType);
+				}
+			}
+
+			_entries[index].Type  = newType;
+			_entries[index].Value = newValue;
+
+			PersistEntries();
+			_exportsListView?.RefreshItem(index);
 		}
 
 		private void OnValueChanged(int index, object newValue) {
 			if (_entries == null || index < 0 || index >= _entries.Count) return;
 
 			_entries[index].Value = newValue;
-			var dict = Module.GetExports();
-			dict[_entries[index].Key] = newValue;
-
-			Module.SetExports(dict);
-			EditorUtility.SetDirty(Module);
-			Repaint();
+			PersistEntries();
 		}
-
 
 		private VisualElement CreateValueField(object value, Type type, int index) {
-			if (typeof(string) == type) {
-				var stringField = new TextField { value = value as string ?? string.Empty };
-				stringField.RegisterValueChangedCallback(evt => OnValueChanged(index, evt.newValue));
-				return stringField;
-			}
+			if (type == null) return new Label { text = "—" };
 
-			if (typeof(int) == type) {
-				var intField = new IntegerField { value = value is int intValue ? intValue : 0 };
-				intField.RegisterValueChangedCallback(evt => OnValueChanged(index, evt.newValue));
-				return intField;
-			}
-
-			if (typeof(float) == type) {
-				var floatField = new FloatField { value = value is float floatValue ? floatValue : 0f };
-				floatField.RegisterValueChangedCallback(evt => OnValueChanged(index, evt.newValue));
-				return floatField;
-			}
-
-			if (typeof(bool) == type) {
-				var boolField = new Toggle { value = value is true };
-				boolField.RegisterValueChangedCallback(evt => OnValueChanged(index, evt.newValue));
-				return boolField;
-			}
-
-
-			if (typeof(Object).IsAssignableFrom(type) || type == typeof(Object)) {
-				var objectField = new ObjectField { objectType = type, value = value as Object };
-				objectField.RegisterValueChangedCallback(evt => OnValueChanged(index, evt.newValue));
-				return objectField;
-			}
-
-			// Fallback to string field for unsupported types
-			var fallbackField = new Label { text = $"Unsupported type: {type?.Name ?? "null"}" };
-			return fallbackField;
+			return type.IsArray
+				? CreateArrayValueField(value as Array, type.GetElementType() ?? typeof(object), index)
+				: CreateScalarValueField(value, type, newValue => OnValueChanged(index, newValue));
 		}
 
+		private VisualElement CreateScalarValueField(object value, Type type, Action<object> onChanged) {
+			if (type == typeof(string)) {
+				var field = new TextField {
+					value     = value as string ?? string.Empty,
+					multiline = true,
+					style = {
+						whiteSpace = WhiteSpace.Normal,
+						minHeight  = 20
+					}
+				};
+				field.RegisterValueChangedCallback(evt => onChanged(evt.newValue));
+				return field;
+			}
+
+			if (type == typeof(int)) {
+				var field = new IntegerField { value = value is int intValue ? intValue : 0 };
+				field.RegisterValueChangedCallback(evt => onChanged(evt.newValue));
+				return field;
+			}
+
+			if (type == typeof(float)) {
+				var field = new FloatField { value = value is float floatValue ? floatValue : 0f };
+				field.RegisterValueChangedCallback(evt => onChanged(evt.newValue));
+				return field;
+			}
+
+			if (type == typeof(bool)) {
+				var field = new Toggle { value = value is true };
+				field.RegisterValueChangedCallback(evt => onChanged(evt.newValue));
+				return field;
+			}
+
+			if (typeof(Object).IsAssignableFrom(type)) {
+				var field = new ObjectField { objectType = type, value = value as Object };
+				field.RegisterValueChangedCallback(evt => onChanged(evt.newValue));
+				return field;
+			}
+
+			return new Label { text = $"Type non supporté : {type.Name}" };
+		}
+
+		private VisualElement CreateArrayValueField(Array currentArray, Type elementType, int index) {
+			var list = currentArray != null ? currentArray.Cast<object>().ToList() : new List<object>();
+
+			var container = new VisualElement();
+			var header = new VisualElement {
+				style = {
+					flexDirection = FlexDirection.Row,
+					alignItems    = Align.Center,
+					marginBottom  = 2
+				}
+			};
+			var countLabel = new Label {
+				style = {
+					flexGrow              = 1,
+					unityFontStyleAndWeight = FontStyle.Italic,
+					fontSize              = 10
+				}
+			};
+			var addButton = new Button { text = "+", style = { width = 20 } };
+
+			header.Add(countLabel);
+			header.Add(addButton);
+
+			var rowsContainer = new VisualElement();
+			container.Add(header);
+			container.Add(rowsContainer);
+
+			void Commit() {
+				var array = Array.CreateInstance(elementType, list.Count);
+				for (var i = 0; i < list.Count; i++) array.SetValue(list[i], i);
+				countLabel.text = $"{list.Count} élément(s)";
+				OnValueChanged(index, array);
+			}
+
+			void RebuildRows() {
+				rowsContainer.Clear();
+
+				for (var i = 0; i < list.Count; i++) {
+					var elementIndex = i;
+					var row = new VisualElement {
+						style = {
+							flexDirection = FlexDirection.Row,
+							alignItems    = Align.Center,
+							marginLeft    = 4,
+							marginBottom  = 1
+						}
+					};
+
+					var fieldSlot = new VisualElement { style = { flexGrow = 1 } };
+					fieldSlot.Add(
+						CreateScalarValueField(
+							list[elementIndex],
+							elementType,
+							newVal => {
+								list[elementIndex] = newVal;
+								Commit();
+							}
+						)
+					);
+
+					var removeButton = new Button(() => {
+						list.RemoveAt(elementIndex);
+						Commit();
+						RebuildRows();
+					}) { text = "-", style = { width = 20 } };
+
+					row.Add(fieldSlot);
+					row.Add(removeButton);
+					rowsContainer.Add(row);
+				}
+			}
+
+			addButton.clicked += () => {
+				list.Add(CreateDefaultScalarValue(elementType));
+				Commit();
+				RebuildRows();
+			};
+
+			countLabel.text = $"{list.Count} élément(s)";
+			RebuildRows();
+
+			return container;
+		}
+
+		private static object CreateDefaultScalarValue(Type type) {
+			if (type == typeof(string)) return string.Empty;
+			if (typeof(Object).IsAssignableFrom(type)) return null;
+			if (type.IsValueType) return Activator.CreateInstance(type);
+			return null;
+		}
+
+		private static object CreateDefaultValue(Type type) {
+			if (type == null) return null;
+			if (type.IsArray) return Array.CreateInstance(type.GetElementType() ?? typeof(object), 0);
+			return CreateDefaultScalarValue(type);
+		}
+
+		private void PersistEntries() {
+			Module.SetExportsDetailed(_entries.Select(e => (e.Key, e.Type, e.Value)));
+			EditorUtility.SetDirty(Module);
+		}
 
 		private void RefreshExportsList() {
 			_entries.Clear();
 
-			var exports = Module.GetExports();
-			foreach (var kv in exports)
-				_entries.Add(
-					new ExportEntry {
-						Key   = kv.Key,
-						Value = kv.Value,
-						Type  = kv.Value?.GetType() ?? typeof(string)
-					}
-				);
+			foreach (var (key, type, value) in Module.GetExportsDetailed())
+				_entries.Add(new ExportEntry { Key = key, Type = type, Value = value });
 
 			_exportsListView?.RefreshItems();
 		}
 
 		private void OnItemsAdded(IEnumerable<int> indices) {
-			var sortedIndices = indices.OrderBy(x => x).ToList();
-			var exports       = Module.GetExports();
+			foreach (var index in indices.OrderBy(x => x)) {
+				if (index < 0 || index >= _entries.Count) continue;
 
-			foreach (var index in sortedIndices) {
-				var newKey  = "new_export";
-				var counter = 1;
+				var reservedKeys = _entries
+					.Where((_, i) => i != index)
+					.Select(e => e.Key)
+					.Where(k => k != null);
 
-				// Find unique key
-				while (exports.ContainsKey(newKey)) {
-					newKey = $"new_export_{counter}";
-					counter++;
-				}
-
-				var newItem = new ExportEntry {
-					Key   = newKey,
+				_entries[index] = new ExportEntry {
+					Key   = GenerateUniqueKey("new_export", reservedKeys),
 					Type  = typeof(string),
-					Value = ""
+					Value = string.Empty
 				};
-
-				// Ensure the index is within bounds
-				var insertIndex = Math.Min(index, _entries.Count);
-				_entries.Insert(insertIndex, newItem);
-				exports[newKey] = "";
 			}
 
-			Module.SetExports(exports);
-			EditorUtility.SetDirty(Module);
-
-			// Refresh the list view to ensure proper binding
+			PersistEntries();
 			_exportsListView?.RefreshItems();
 		}
 
 		private void OnItemsRemoved(IEnumerable<int> indices) {
-			var sortedIndices = indices.OrderByDescending(x => x).ToList();
-			var exports       = Module.GetExports();
+			PersistEntries();
+		}
 
-			foreach (var index in sortedIndices) {
-				if (index < 0 || index >= _entries.Count) continue;
-				exports.Remove(_entries[index].Key);
-				_entries.RemoveAt(index);
-			}
+		private static string GenerateUniqueKey(string baseKey, IEnumerable<string> existingKeys) {
+			var keys = existingKeys as ICollection<string> ?? existingKeys.ToList();
+			if (!keys.Contains(baseKey)) return baseKey;
 
-			Module.SetExports(exports);
-			EditorUtility.SetDirty(Module);
+			var counter = 1;
+			string candidate;
+			do candidate = $"{baseKey}_{counter++}";
+			while (keys.Contains(candidate));
+
+			return candidate;
 		}
 	}
 }
