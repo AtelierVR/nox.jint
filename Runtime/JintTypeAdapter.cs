@@ -421,7 +421,7 @@ namespace Nox.Jint.Runtime {
 		}
 
 		private static JsValue Fallback(JintEngine engine, object value, IJintScriptingContext context = null) {
-			NoxLogger.LogDebug($"Fallback conversion for {value.GetType().FullName} in {engine.GetType().FullName}.", tag: nameof(JintTypeAdapter));
+			NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
 			return JsValue.FromObject(engine, value);
 		}
 
@@ -443,7 +443,7 @@ namespace Nox.Jint.Runtime {
 			if (value is IEnumerable enumerable)
 				return ToEnumerable(engine, enumerable, context);
 
-			NoxLogger.LogDebug($"Reflective conversion for {value.GetType().FullName} in {engine.GetType().FullName}.", tag: nameof(JintTypeAdapter));
+			NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
 			if (value is UnityEngine.Object)
 				return ObjectWrapper.Create(engine, value, value.GetType());
 			return BuildReflective(engine, value, context);
@@ -523,12 +523,14 @@ namespace Nox.Jint.Runtime {
 			task.Then(
 				onSuccess: v => {
 					UniTask.Post(() => {
+						engine.ResetTimeout();
 						resolve(ToValue(engine, v, context));
 						engine.Advanced.ProcessTasks();
 					});
 				},
 				onError: ex => {
 					UniTask.Post(() => {
+						engine.ResetTimeout();
 						NoxLogger.LogWarning($"Async method failed: {ex.Message}", tag: "jint_async_exception");
 						reject(ToValue(engine, ex, context));
 						engine.Advanced.ProcessTasks();
@@ -537,6 +539,18 @@ namespace Nox.Jint.Runtime {
 			).Forget();
 
 			return promise;
+		}
+
+		internal static void ResetTimeout(this JintEngine engine) {
+		    var fieldInfo = typeof(JintEngine).GetField("_constraints", BindingFlags.NonPublic | BindingFlags.Instance);
+		    if (fieldInfo?.GetValue(engine) is not IEnumerable<Constraint> constraints)
+		        return;
+
+		    foreach (var constraint in constraints)
+		        if (constraint != null && constraint.GetType().FullName == "Jint.Constraints.TimeConstraint") {
+		            constraint.Reset();
+		            break;
+		        }
 		}
 
 		private static object[] ConvertArgs(JsValue[] args) {
@@ -548,27 +562,32 @@ namespace Nox.Jint.Runtime {
 			return result;
 		}
 
-		public static object FromValue(JsValue value) {
-			if (value.IsNull() || value.IsUndefined())
-				return null;
-			if (!value.IsObject())
-				return value.ToObject();
-			var obj = value.AsObject();
-			if (obj is ArrayInstance arr) {
-				var items  = arr.ToArray();
-				var result = new object[items.Length];
-				for (var i = 0; i < items.Length; i++)
-					result[i] = FromValue(items[i]);
-				return result;
-			}
-			if (obj is ObjectWrapper wrapper)
-				return wrapper.Target;
-			if (obj is JsError jsError)
-				return FromJsError(jsError);
-			var targetProp = obj.Get("__target");
-			if (targetProp?.IsUndefined() == false && !targetProp.IsNull())
-				return FromValue(targetProp);
-			return new PropertyDictionary(obj.Engine, obj);
+
+		public static object FromValue(JsValue value) => value switch {
+		    _ when value.IsNull() || value.IsUndefined() => null,
+		    _ when value.IsCallable()                    => new Func<object[], object>(args => {
+		        var engine = value.AsObject().Engine;
+		        var jsArgs = args?.Select(a => ToValue(engine, a)).ToArray() ?? Array.Empty<JsValue>();
+		        return FromValue(value.Call(jsArgs));
+		    }),
+		    _ when !value.IsObject()                     => value.ToObject(),
+
+		    ArrayInstance arr     => arr.ToArray().Select(FromValue).ToArray(),
+		    ObjectWrapper wrapper => wrapper.Target,
+		    JsError jsError       => FromJsError(jsError),
+
+		    ObjectInstance obj when !obj.Get("__target").IsUndefined() && !obj.Get("__target").IsNull() 
+		        => FromValue(obj.Get("__target")),
+
+			// Intercepte les objets littéraux JS anonymes sans déclencher le warning de fallback
+    		ObjectInstance obj => new PropertyDictionary(obj.Engine, obj),
+
+		    _ => FallbackFromValue(value)
+		};
+
+		private static object FallbackFromValue(JsValue value) {
+		    NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
+		    return new PropertyDictionary(value.AsObject().Engine, value.AsObject());
 		}
 
 		/// <summary>
