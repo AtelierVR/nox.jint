@@ -70,7 +70,7 @@ namespace Nox.Jint.Runtime {
 						try {
 							if (kv.Value.IsDataDescriptor()) {
 								// Data property — value already computed, safe to read
-								valStr = FormatArg(JintTypeAdapter.FromJsValue(kv.Value.Value), maxDepth, currentDepth + 1);
+								valStr = FormatArg(JintTypeAdapter.FromValue(kv.Value.Value), maxDepth, currentDepth + 1);
 							} else {
 								// Accessor — never invoke the getter during inspection
 								valStr = $"[getter {key}]";

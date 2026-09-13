@@ -10,6 +10,7 @@ using Jint;
 using Jint.Native;
 using Jint.Native.Array;
 using Jint.Native.Object;
+using Jint.Runtime;
 using Jint.Runtime.Descriptors;
 using Jint.Runtime.Interop;
 using Jint.Runtime.Modules;
@@ -43,7 +44,7 @@ namespace Nox.Jint.Runtime {
 							} else {
 								var getter = new ClrFunction(engine, "get", (thisObj, _) => ToValue(engine, property.Getter(ctx, instance), ctx));
 								var setter = new ClrFunction(engine, "set", (_, args) => {
-									property.Setter(ctx, instance, FromJsValue(args[0]));
+									property.Setter(ctx, instance, FromValue(args[0]));
 									return JsValue.Undefined;
 								});
 								obj.DefineOwnProperty(name, new GetSetPropertyDescriptor(getter, setter, enumerable: true, configurable: true));
@@ -55,7 +56,7 @@ namespace Nox.Jint.Runtime {
 								var nativeArgs = ConvertArgs(args);
 								try { return ToValue(engine, method.Handler(ctx, instance, nativeArgs), ctx); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 							});
 							obj.DefineOwnProperty(name, new PropertyDescriptor(fn, writable: true, enumerable: true, configurable: true));
@@ -67,7 +68,7 @@ namespace Nox.Jint.Runtime {
 								UniTask<object> task;
 								try { task = method.Handler(ctx, instance, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 								return ToValue(engine, task, ctx);
 							});
@@ -164,7 +165,7 @@ namespace Nox.Jint.Runtime {
 						return JsValue.Undefined;
 					var nativeArgs = new object[Math.Max(0, args.Length - 1)];
 					for (var i = 1; i < args.Length; i++)
-						nativeArgs[i - 1] = FromJsValue(args[i]);
+						nativeArgs[i - 1] = FromValue(args[i]);
 					evt.Emit(ctx, instance, nativeArgs);
 					return JsValue.Undefined;
 				}), true);
@@ -224,7 +225,7 @@ namespace Nox.Jint.Runtime {
 							ClrFunction nsSetter = null;
 							if (property.Setter != null)
 								nsSetter = new ClrFunction(engine, "set", (_, args) => {
-									property.Setter(ctx, FromJsValue(args.Length > 0 ? args[0] : JsValue.Undefined));
+									property.Setter(ctx, FromValue(args.Length > 0 ? args[0] : JsValue.Undefined));
 									return JsValue.Undefined;
 								});
 							ns.DefineOwnProperty(name, new GetSetPropertyDescriptor(nsGetter, nsSetter, enumerable: true, configurable: false));
@@ -236,7 +237,7 @@ namespace Nox.Jint.Runtime {
 								var nativeArgs = ConvertArgs(args);
 								try { return ToValue(engine, method.Handler(ctx, nativeArgs), ctx); } catch (Exception e) {
 									NoxLogger.LogError($"{module.Id.Resolve(NameResolver.snake_case_style)}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 							});
 							builder.ExportValue(name, fn);
@@ -250,7 +251,7 @@ namespace Nox.Jint.Runtime {
 								UniTask<object> task;
 								try { task = method.Handler(ctx, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{module.Id.Resolve(NameResolver.snake_case_style)}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 								return ToValue(engine, task, ctx);
 							});
@@ -282,7 +283,7 @@ namespace Nox.Jint.Runtime {
 					var constructorFn = new ClrFunction(engine, converter.HandledType.Name, (_, args) => {
 						try { return ToValue(engine, converter.Constructor(ctx, ConvertArgs(args)), ctx); } catch (Exception e) {
 							NoxLogger.LogError($"{converter.HandledType.Name} constructor: {e.Message}", tag: nameof(JintTypeAdapter));
-							return JsValue.Null;
+							return ToValue(engine, e, ctx);
 						}
 					});
 					obj.DefineOwnProperty(converter.HandledType.Name, new PropertyDescriptor(constructorFn, writable: true, enumerable: false, configurable: true));
@@ -298,7 +299,7 @@ namespace Nox.Jint.Runtime {
 							} else {
 								var getter = new ClrFunction(engine, "get", (thisObj, _) => ToValue(engine, property.Getter(ctx, null), ctx));
 								var setter = new ClrFunction(engine, "set", (_, args) => {
-									property.Setter(ctx, null, FromJsValue(args[0]));
+									property.Setter(ctx, null, FromValue(args[0]));
 									return JsValue.Undefined;
 								});
 								obj.DefineOwnProperty(name, new GetSetPropertyDescriptor(getter, setter, enumerable: true, configurable: true));
@@ -310,7 +311,7 @@ namespace Nox.Jint.Runtime {
 								var nativeArgs = ConvertArgs(args);
 								try { return ToValue(engine, method.Handler(ctx, null, nativeArgs), ctx); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 							});
 							obj.DefineOwnProperty(name, new PropertyDescriptor(fn, writable: true, enumerable: true, configurable: true));
@@ -322,7 +323,7 @@ namespace Nox.Jint.Runtime {
 								UniTask<object> task;
 								try { task = method.Handler(ctx, null, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
-									return JsValue.Null;
+									return ToValue(engine, e, ctx);
 								}
 								return ToValue(engine, task, ctx);
 							});
@@ -385,6 +386,7 @@ namespace Nox.Jint.Runtime {
 				bool b                                                => b ? JsBoolean.True : JsBoolean.False,
 
 				JsValue v                                             => v,
+				Exception ex                                          => ToJsError(engine, ex),
 				JObject jo                                            => ToJsonObject(engine, jo, context),
 				JArray ja                                             => ToJsonArray(engine, ja, context),
 				JValue jv                                             => ToValue(engine, jv.Value, context),
@@ -400,6 +402,24 @@ namespace Nox.Jint.Runtime {
 				_                                                     => Fallback(engine, value, context)
 			};
 		
+		/// <summary>
+		/// Converts a .NET exception into a JS Error instance. If the exception is a
+		/// <see cref="JavaScriptException"/> (i.e. Jint re-throwing a script-side error we caught earlier),
+		/// the original JS error value is returned unchanged instead of being re-wrapped.
+		/// </summary>
+		private static JsValue ToJsError(JintEngine engine, Exception ex) {
+			if (ex is JavaScriptException jsEx)
+				return jsEx.Error;
+
+			var jsError = engine.Intrinsics.Error.Construct(ex.Message ?? string.Empty);
+			jsError.Set("name", JsValue.FromObject(engine, ex.GetType().Name), true);
+			jsError.Set("stack", JsValue.FromObject(engine, $"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}"), true);
+			// Keep a handle on the original .NET exception so FromValue can hand back the exact same
+			// instance instead of a reconstructed JsScriptException when this error round-trips.
+			jsError.DefineOwnProperty("__exception", new PropertyDescriptor(JsValue.FromObject(engine, ex), writable: false, enumerable: false, configurable: false));
+			return jsError;
+		}
+
 		private static JsValue Fallback(JintEngine engine, object value, IJintScriptingContext context = null) {
 			NoxLogger.LogDebug($"Fallback conversion for {value.GetType().FullName} in {engine.GetType().FullName}.", tag: nameof(JintTypeAdapter));
 			return JsValue.FromObject(engine, value);
@@ -408,7 +428,8 @@ namespace Nox.Jint.Runtime {
 		private static JsValue ToValueViaContext(JintEngine engine, object value, IJintScriptingContext context) {
 			var converted = context.ToScript(value);
 			if (converted is JsValue jv) return jv;
-			if (!ReferenceEquals(converted, value)) return ToValue(engine, converted, null);
+			if (!ReferenceEquals(converted, value)) 
+				return ToValue(engine, converted, null);
 
 			var t = value.GetType();
 			if (t.IsPrimitive || t == typeof(string) || t.IsEnum || t.IsValueType)
@@ -444,7 +465,7 @@ namespace Nox.Jint.Runtime {
 				if (prop.CanWrite) {
 					var setter = new ClrFunction(engine, "set", (_, args) => {
 						try {
-							var raw = args.Length > 0 ? FromJsValue(args[0]) : null;
+							var raw = args.Length > 0 ? FromValue(args[0]) : null;
 							p.SetValue(instance, TryCoerceArg(raw, p.PropertyType));
 						} catch { }
 						return JsValue.Undefined;
@@ -509,7 +530,7 @@ namespace Nox.Jint.Runtime {
 				onError: ex => {
 					UniTask.Post(() => {
 						NoxLogger.LogWarning($"Async method failed: {ex.Message}", tag: "jint_async_exception");
-						reject(JsValue.FromObject(engine, ex.Message));
+						reject(ToValue(engine, ex, context));
 						engine.Advanced.ProcessTasks();
 					});
 				}
@@ -523,11 +544,11 @@ namespace Nox.Jint.Runtime {
 				return Array.Empty<object>();
 			var result = new object[args.Length];
 			for (var i = 0; i < args.Length; i++)
-				result[i] = FromJsValue(args[i]);
+				result[i] = FromValue(args[i]);
 			return result;
 		}
 
-		public static object FromJsValue(JsValue value) {
+		public static object FromValue(JsValue value) {
 			if (value.IsNull() || value.IsUndefined())
 				return null;
 			if (!value.IsObject())
@@ -537,15 +558,50 @@ namespace Nox.Jint.Runtime {
 				var items  = arr.ToArray();
 				var result = new object[items.Length];
 				for (var i = 0; i < items.Length; i++)
-					result[i] = FromJsValue(items[i]);
+					result[i] = FromValue(items[i]);
 				return result;
 			}
 			if (obj is ObjectWrapper wrapper)
 				return wrapper.Target;
+			if (obj is JsError jsError)
+				return FromJsError(jsError);
 			var targetProp = obj.Get("__target");
 			if (targetProp?.IsUndefined() == false && !targetProp.IsNull())
-				return FromJsValue(targetProp);
+				return FromValue(targetProp);
 			return new PropertyDictionary(obj.Engine, obj);
 		}
+
+		/// <summary>
+		/// Converts a JS Error instance back into a .NET exception. If the error was produced by
+		/// <see cref="ToJsError"/> from an original .NET exception, that exact instance is returned;
+		/// otherwise a <see cref="JsScriptException"/> carrying the error's name/message/stack is built.
+		/// </summary>
+		private static Exception FromJsError(JsError jsError) {
+			var wrapped = jsError.Get("__exception");
+			if (wrapped?.IsUndefined() == false && !wrapped.IsNull() && FromValue(wrapped) is Exception original)
+				return original;
+
+			var name    = jsError.Get("name")?.ToString() ?? "Error";
+			var message = jsError.Get("message")?.ToString() ?? string.Empty;
+			var stack   = jsError.Get("stack")?.ToString();
+			return new JsScriptException(name, message, stack);
+		}
+	}
+
+	/// <summary>
+	/// .NET representation of a JavaScript Error that did not originate from a wrapped .NET exception
+	/// (e.g. a plain "throw new Error(...)" in script). Preserves the JS error's name, message and stack
+	/// so it behaves like a normal exception on the C# side.
+	/// </summary>
+	public sealed class JsScriptException : Exception {
+		public string JsName { get; }
+		public string JsStack { get; }
+
+		public JsScriptException(string jsName, string message, string jsStack) : base(message) {
+			JsName  = jsName;
+			JsStack = jsStack;
+		}
+
+		public override string ToString() => string.IsNullOrEmpty(JsStack) ? $"{JsName}: {Message}" : $"{JsName}: {Message}\n{JsStack}";
 	}
 }

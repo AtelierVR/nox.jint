@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using Jint;
 using Jint.Native;
 using Jint.Native.Object;
@@ -14,7 +15,7 @@ namespace Nox.Jint.Runtime {
 	/// there is no recursion and no stale copy.
 	///
 	/// <para>
-	/// Returned by <see cref="JintTypeAdapter.FromJsValue"/> for plain JS
+	/// Returned by <see cref="JintTypeAdapter.FromValue"/> for plain JS
 	/// objects, so consuming modules only need standard
 	/// <see cref="IDictionary{TKey,TValue}"/> semantics
 	/// (<c>TryGetValue</c>, <c>ContainsKey</c>, <c>this[key]</c>, enumeration)
@@ -39,7 +40,7 @@ namespace Nox.Jint.Runtime {
 		public object this[string key] {
 			get {
 				var value = _target.Get(key);
-				return value.IsUndefined() ? null : JintTypeAdapter.FromJsValue(value);
+				return value.IsUndefined() ? null : JintTypeAdapter.FromValue(value);
 			}
 			set => Set(key, value);
 		}
@@ -50,7 +51,7 @@ namespace Nox.Jint.Runtime {
 				return false;
 			}
 			var raw = _target.Get(key);
-			value = raw.IsUndefined() ? null : JintTypeAdapter.FromJsValue(raw);
+			value = raw.IsUndefined() ? null : JintTypeAdapter.FromValue(raw);
 			return true;
 		}
 
@@ -127,13 +128,27 @@ namespace Nox.Jint.Runtime {
 				var jsVal = kv.Value.IsDataDescriptor() ? kv.Value.Value : _target.Get(jsKey);
 				yield return new KeyValuePair<string, object>(
 					jsKey.ToString(),
-					jsVal.IsUndefined() ? null : JintTypeAdapter.FromJsValue(jsVal)
+					jsVal.IsUndefined() ? null : JintTypeAdapter.FromValue(jsVal)
 				);
 			}
 		}
 
 		IEnumerator IEnumerable.GetEnumerator() 
             => GetEnumerator();
+
+		public override string ToString() {
+		    var jsType = _target.GetType().Name;
+		    var entries = _target.GetOwnProperties()
+		        .Where(e => e.Value.Enumerable)
+		        .Select(e => {
+		            var val = e.Value.IsDataDescriptor() 
+						? e.Value.Value 
+						: _target.Get(e.Key);
+		            return $"{e.Key}={val}";
+		        });
+		
+		    return $"{GetType().Name}<{jsType}>[{string.Join(", ", entries)}]";
+		}
 
 		// ── Internal ──────────────────────────────────────────────────────
 
