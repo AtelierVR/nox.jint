@@ -220,6 +220,10 @@ namespace Nox.Jint.Runtime {
 					switch (binding) {
 						case IScriptingPropertyDefinition property: {
 							var name = binding.Name.Resolve(NameResolver.camelCaseStyle);
+							// A named import ('import { all } from "players"') copies the value when the module is
+							// evaluated, so it must be reserved for methods and types. The namespace object below
+							// keeps live getters: scripts read the variables through it
+							// ('import players from "players"; players.all').
 							builder.ExportValue(name, ToValue(engine, property.Getter(ctx), ctx));
 							var nsGetter = new ClrFunction(engine, "get", (_, _) => ToValue(engine, property.Getter(ctx), ctx));
 							ClrFunction nsSetter = null;
