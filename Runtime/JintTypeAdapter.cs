@@ -82,6 +82,9 @@ namespace Nox.Jint.Runtime {
 							// Create getter/setter for the event property that returns an object with on/off/once/emit methods
 							var getter = new ClrFunction(engine, "get", (thisObj, _) => {
 								var eventObj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
+								// Built once per event object instead of on every event: building the
+								// wrapper allocates the whole JS facade of the .NET instance.
+								var jsThis = ToValue(engine, instance, ctx);
 								
 								// on(...) method
 								var onFn = new ClrFunction(engine, "on", (_, args) => {
@@ -89,10 +92,7 @@ namespace Nox.Jint.Runtime {
 										return JsValue.Undefined;
 									
 									evt.AddHandler(ctx, instance, (callbackArgs) => {
-										var jsArgs = new JsValue[callbackArgs.Length];
-										for (int i = 0; i < callbackArgs.Length; i++)
-											jsArgs[i] = ToValue(engine, callbackArgs[i], ctx);
-										var jsThis = ToValue(engine, instance, ctx);
+										var jsArgs = ToJsArgs(engine, callbackArgs, ctx);
 										args[0].Call(jsThis, jsArgs);
 									});
 									
@@ -112,10 +112,7 @@ namespace Nox.Jint.Runtime {
 
 									void onceAction(object[] callbackArgs) {
 										try {
-											var jsArgs = new JsValue[callbackArgs.Length];
-											for (int i = 0; i < callbackArgs.Length; i++)
-												jsArgs[i] = ToValue(engine, callbackArgs[i], ctx);
-											var jsThis = ToValue(engine, instance, ctx);
+											var jsArgs = ToJsArgs(engine, callbackArgs, ctx);
 											args[0].Call(jsThis, jsArgs);
 										} finally {
 											evt.RemoveHandler(ctx, instance, onceAction);
@@ -191,13 +188,14 @@ namespace Nox.Jint.Runtime {
 					return JsValue.Undefined;
 
 				var handler = args[1];
+				// `this` is the receiver of the `on(...)` call, so it never changes for this
+				// registration: build the wrapper lazily, once, instead of on every event.
+				var jsThis = thisObj.IsUndefined() || thisObj.IsNull() ? null : thisObj;
 				void callback(object[] callbackArgs) {
 					try {
-						var jsArgs = new JsValue[callbackArgs.Length];
-						for (var i = 0; i < callbackArgs.Length; i++)
-							jsArgs[i] = ToValue(engine, callbackArgs[i], ctx);
-						
-						var jsThis = thisObj.IsUndefined() || thisObj.IsNull() ? ToValue(engine, instance, ctx) : thisObj;
+						var jsArgs = ToJsArgs(engine, callbackArgs, ctx);
+
+						jsThis ??= ToValue(engine, instance, ctx);
 						handler.Call(jsThis, jsArgs);
 					} catch (Exception ex) {
 						NoxLogger.LogWarning($"Event '{eventName}' handler failed: {ex.Message}", tag: nameof(JintTypeAdapter));
@@ -425,18 +423,39 @@ namespace Nox.Jint.Runtime {
 		}
 
 		private static JsValue Fallback(JintEngine engine, object value, IJintScriptingContext context = null) {
-			NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
+			WarnUnsupported(value.GetType(), value);
 			return JsValue.FromObject(engine, value);
 		}
 
+		/// <summary>
+		/// Types already reported as unsupported. A script can convert the same value on every frame,
+		/// and the warning (string interpolation + Unity log) costs far more than the conversion it
+		/// describes: report each type once.
+		/// </summary>
+		private static readonly HashSet<Type> WarnedTypes = new();
+
+		private static void WarnUnsupported(Type type, object value) {
+			bool first;
+			lock (WarnedTypes)
+				first = WarnedTypes.Add(type);
+
+			if (first)
+				NoxLogger.LogWarning($"{value} ({type.FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
+		}
+
 		private static JsValue ToValueViaContext(JintEngine engine, object value, IJintScriptingContext context) {
+			// Fast path: primitives and strings are never exposed through a converter. Calling
+			// the context first costs a lock plus a converter lookup on every converted value.
+			var t = value.GetType();
+			if (t.IsPrimitive || t == typeof(string))
+				return JsValue.FromObject(engine, value);
+
 			var converted = context.ToScript(value);
 			if (converted is JsValue jv) return jv;
 			if (!ReferenceEquals(converted, value)) 
 				return ToValue(engine, converted, null);
 
-			var t = value.GetType();
-			if (t.IsPrimitive || t == typeof(string) || t.IsEnum || t.IsValueType)
+			if (t.IsEnum || t.IsValueType)
 				return JsValue.FromObject(engine, value);
 
 			if (value is IDictionary<string, object> stringDict)
@@ -447,7 +466,7 @@ namespace Nox.Jint.Runtime {
 			if (value is IEnumerable enumerable)
 				return ToEnumerable(engine, enumerable, context);
 
-			NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
+			WarnUnsupported(t, value);
 			if (value is UnityEngine.Object)
 				return ObjectWrapper.Create(engine, value, value.GetType());
 			return BuildReflective(engine, value, context);
@@ -546,15 +565,36 @@ namespace Nox.Jint.Runtime {
 		}
 
 		internal static void ResetTimeout(this JintEngine engine) {
-		    var fieldInfo = typeof(JintEngine).GetField("_constraints", BindingFlags.NonPublic | BindingFlags.Instance);
-		    if (fieldInfo?.GetValue(engine) is not IEnumerable<Constraint> constraints)
-		        return;
+			if (ConstraintsField?.GetValue(engine) is not Constraint[] constraints)
+				return;
 
-		    foreach (var constraint in constraints)
-		        if (constraint != null && constraint.GetType().FullName == "Jint.Constraints.TimeConstraint") {
-		            constraint.Reset();
-		            break;
-		        }
+			// Indexed loop: enumerating through IEnumerable<Constraint> boxes an enumerator
+			// on every async result, which is on the hot path of awaited module calls.
+			for (var i = 0; i < constraints.Length; i++) {
+				var constraint = constraints[i];
+				if (constraint != null && constraint.GetType().FullName == "Jint.Constraints.TimeConstraint") {
+					constraint.Reset();
+					return;
+				}
+			}
+		}
+
+		/// <summary>Cached reflection handle over the engine's constraint list (looked up once).</summary>
+		private static readonly FieldInfo ConstraintsField =
+			typeof(JintEngine).GetField("_constraints", BindingFlags.NonPublic | BindingFlags.Instance);
+
+		/// <summary>Shared empty argument array (never mutated by the engine).</summary>
+		private static readonly JsValue[] EmptyJsArgs = Array.Empty<JsValue>();
+
+		/// <summary>Converts native callback arguments to JS values, reusing the empty array.</summary>
+		private static JsValue[] ToJsArgs(JintEngine engine, object[] args, IJintScriptingContext ctx) {
+			if (args == null || args.Length == 0)
+				return EmptyJsArgs;
+
+			var jsArgs = new JsValue[args.Length];
+			for (var i = 0; i < args.Length; i++)
+				jsArgs[i] = ToValue(engine, args[i], ctx);
+			return jsArgs;
 		}
 
 		private static object[] ConvertArgs(JsValue[] args) {
@@ -571,7 +611,7 @@ namespace Nox.Jint.Runtime {
 		    _ when value.IsNull() || value.IsUndefined() => null,
 		    _ when value.IsCallable()                    => new Func<object[], object>(args => {
 		        var engine = value.AsObject().Engine;
-		        var jsArgs = args?.Select(a => ToValue(engine, a)).ToArray() ?? Array.Empty<JsValue>();
+		        var jsArgs = ToJsArgs(engine, args, null);
 		        return FromValue(value.Call(jsArgs));
 		    }),
 		    _ when !value.IsObject()                     => value.ToObject(),

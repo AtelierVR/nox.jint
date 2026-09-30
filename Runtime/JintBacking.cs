@@ -9,6 +9,7 @@ using Nox.CCK.Jint;
 using Nox.CCK.Utils;
 using UnityEngine;
 using Engine = Jint.Engine;
+using JsValue = Jint.Native.JsValue;
 using LogType = UnityEngine.LogType;
 using Transform = UnityEngine.Transform;
 using NoxLogger = Nox.CCK.Utils.Logger;
@@ -20,6 +21,51 @@ namespace Nox.Jint.Runtime {
 		public JintScript script;
 		public ObjectInstance ExecutionContext;
 		public Logger Logger;
+
+		/// <summary>
+		/// Cache of the resolved exported functions, keyed by hook name.
+		/// <para>
+		/// Unity calls a dozen messages per frame (<c>Update</c>, <c>LateUpdate</c>, <c>OnGUI</c>,
+		/// <c>OnPreCull</c>, <c>OnPreRender</c>, …): each one resolves its hook through
+		/// <see cref="ExecutionContext"/>, which allocates a JS string and walks the module
+		/// namespace every time. Exports of an evaluated module never change, so the lookup is
+		/// cached (also caching the “not exported” case, which is the most frequent one).
+		/// The cache is dropped whenever the engine is rebuilt (<see cref="Prepare"/>/<see cref="OnDestroy"/>).
+		/// </para>
+		/// </summary>
+		private readonly Dictionary<string, JsValue> _methodCache = new(StringComparer.Ordinal);
+
+		/// <summary>Empty argument list shared by every parameterless hook call.</summary>
+		private static readonly object[] NoArgs = Array.Empty<object>();
+
+		/// <summary>Resolves an exported function of the script module, caching the result.</summary>
+		private JsValue ResolveMethod(string name) {
+			if (_methodCache.TryGetValue(name, out var cached))
+				return cached;
+
+			var method = ExecutionContext != null ? ExecutionContext.Get(name) : JsValue.Undefined;
+			_methodCache[name] = method;
+			return method;
+		}
+
+		/// <summary>
+		/// Joins <c>console</c> arguments without the LINQ machinery: a single-argument call
+		/// (by far the most common) returns the value directly with no intermediate collection.
+		/// </summary>
+		private static string Join(JsValue[] values) {
+			if (values == null || values.Length == 0)
+				return string.Empty;
+			if (values.Length == 1)
+				return values[0]?.ToString() ?? "null";
+
+			var builder = new System.Text.StringBuilder();
+			for (var i = 0; i < values.Length; i++) {
+				if (i > 0)
+					builder.Append(' ');
+				builder.Append(values[i]?.ToString() ?? "null");
+			}
+			return builder.ToString();
+		}
 
 		public void Compile()
 			=> DestroyImmediate(this);
@@ -55,6 +101,7 @@ namespace Nox.Jint.Runtime {
 			Logger ??= new Logger();
 
 			NoxLogger.Log("Prepare");
+			_methodCache.Clear();
 			Engine = new Engine(
 				ctx => {
 					ctx.LimitMemory(4_194_304);
@@ -77,9 +124,9 @@ namespace Nox.Jint.Runtime {
 
 			Engine.Modules.Add(
 				"console", builder => builder
-					.ExportFunction("log", objets => Logger.Log(LogType.Log, string.Join(" ", objets.Select(e => e.ToString()))))
-					.ExportFunction("warn", objets => Logger.Log(LogType.Warning, string.Join(" ", objets.Select(e => e.ToString()))))
-					.ExportFunction("error", objets => Logger.Log(LogType.Error, string.Join(" ", objets.Select(e => e.ToString()))))
+					.ExportFunction("log", objets => Logger.Log(LogType.Log, Join(objets)))
+					.ExportFunction("warn", objets => Logger.Log(LogType.Warning, Join(objets)))
+					.ExportFunction("error", objets => Logger.Log(LogType.Error, Join(objets)))
 			);
 
 			Engine.Modules.Add(
@@ -132,10 +179,10 @@ namespace Nox.Jint.Runtime {
 			if (Engine == null)
 				return;
 			try {
-				var method = ExecutionContext.Get(methodName);
+				var method = ResolveMethod(methodName);
 				if (method.IsUndefined())
 					return;
-				Engine.Invoke(method, args);
+				Engine.Invoke(method, args ?? NoArgs);
 			} catch (Exception e) {
 				NoxLogger.LogError($"Error executing {methodName} function: {e.Message}", this);
 			}
@@ -147,9 +194,9 @@ namespace Nox.Jint.Runtime {
 			if (Engine == null)
 				return null;
 			try {
-				var method = ExecutionContext.Get(functionName);
+				var method = ResolveMethod(functionName);
 				return !method.IsUndefined()
-					? Engine.Invoke(method, args)
+					? Engine.Invoke(method, args ?? NoArgs)
 					: null;
 			} catch (Exception e) {
 				NoxLogger.LogError($"Error executing {functionName} function: {e.Message}", this);
@@ -163,10 +210,10 @@ namespace Nox.Jint.Runtime {
 			if (Engine == null)
 				return default;
 			try {
-				var method = ExecutionContext.Get(functionName);
+				var method = ResolveMethod(functionName);
 				if (method.IsUndefined())
 					return default;
-				var result = Engine.Invoke(method, args);
+				var result = Engine.Invoke(method, args ?? NoArgs);
 				return (T)result.ToObject();
 			} catch (Exception e) {
 				NoxLogger.LogError($"Error executing {functionName} function: {e.Message}", this);
