@@ -546,6 +546,7 @@ namespace Nox.Jint.Runtime {
 			task.Then(
 				onSuccess: v => {
 					UniTask.Post(() => {
+						if (IsEngineGone(context)) return;
 						engine.ResetTimeout();
 						resolve(ToValue(engine, v, context));
 						engine.Advanced.ProcessTasks();
@@ -553,6 +554,7 @@ namespace Nox.Jint.Runtime {
 				},
 				onError: ex => {
 					UniTask.Post(() => {
+						if (IsEngineGone(context)) return;
 						engine.ResetTimeout();
 						NoxLogger.LogWarning($"Async method failed: {ex.Message}", tag: "jint_async_exception");
 						reject(ToValue(engine, ex, context));
@@ -563,6 +565,15 @@ namespace Nox.Jint.Runtime {
 
 			return promise;
 		}
+
+		/// <summary>
+		/// <c>true</c> when the context engine no longer exists: the session hosting the script was
+		/// destroyed while an asynchronous task was in flight (the backing sets its engine to
+		/// <c>null</c> after disposing of it). A continuation in this state must no longer touch the
+		/// engine — the JS promise is abandoned along with its realm, and nothing is observing it.
+		/// </summary>
+		private static bool IsEngineGone(IJintScriptingContext context)
+			=> context != null && context.Engine == null;
 
 		internal static void ResetTimeout(this JintEngine engine) {
 			if (ConstraintsField?.GetValue(engine) is not Constraint[] constraints)
