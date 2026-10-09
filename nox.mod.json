@@ -23,6 +23,13 @@
       "website": "https://hactazia.fr/"
     }
   ],
+  "relations": [
+    {
+      "id": "com.unity.modules.physics2d",
+      "type": "depends",
+      "register": "upm+com.unity.modules.physics2d@1.0.0"
+    }
+  ],
   "entrypoints": {
     "main": [
       "Nox.Jint.Runtime.Main"
