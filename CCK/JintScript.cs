@@ -46,8 +46,12 @@ namespace Nox.CCK.Jint {
 		private IJintBacking _backing;
 
 		// ReSharper disable Unity.PerformanceAnalysis
-		public IJintBacking GetBacking()
-			=> _backing ??= GetComponent<IJintBacking>();
+		public IJintBacking GetBacking() {
+			if (_backing is Object backing && !backing)
+				_backing = null;
+
+			return _backing ??= GetComponent<IJintBacking>();
+		}
 
 		public void InvokeFunction(string functionName, params object[] args)
 			=> GetBacking()?.Invoke(functionName, args);
