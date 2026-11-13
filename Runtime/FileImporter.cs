@@ -20,7 +20,7 @@ namespace Nox.Jint.Runtime {
 			for (var i = 0; i < SceneManager.sceneCount; i++) {
 				var scene = SceneManager.GetSceneAt(i);
 				if (!scene.isLoaded) continue;
-				var objs = FindObjectsByType<JintScript>(FindObjectsSortMode.None);
+				var objs = FindObjectsByType<JintScript>();
 				foreach (var obj in objs) {
 					Nox.CCK.Utils.Logger.LogDebug($"Checking JintScript {obj.name} in scene {scene.name}");
 					if (!obj.asset || AssetDatabase.GetAssetPath(obj.asset) != ctx.assetPath) continue;
