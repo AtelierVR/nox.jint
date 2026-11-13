@@ -30,7 +30,7 @@ namespace Nox.Jint.Runtime {
 		/// <c>util.inspect(value, { depth })</c>.
 		/// Avoids calling <c>ObjectInstance.ToString()</c> in C#, which internally
 		/// calls <c>ToObject(ObjectTraverseStack)</c> and recurses infinitely into
-		/// self-typed properties (e.g. <c>Vector3.normalized → Vector3 → …</c>).
+		/// self-typed properties (e.g. <c>Vector3.normalized → Vector3 → ...</c>).
 		/// </summary>
 		public static string FormatArg(object arg, int maxDepth = 3, int currentDepth = 0) {
 			switch (arg) {

@@ -26,7 +26,7 @@ namespace Nox.Jint.Runtime {
 		/// Cache of the resolved exported functions, keyed by hook name.
 		/// <para>
 		/// Unity calls a dozen messages per frame (<c>Update</c>, <c>LateUpdate</c>, <c>OnGUI</c>,
-		/// <c>OnPreCull</c>, <c>OnPreRender</c>, …): each one resolves its hook through
+		/// <c>OnPreCull</c>, <c>OnPreRender</c>, ...): each one resolves its hook through
 		/// <see cref="ExecutionContext"/>, which allocates a JS string and walks the module
 		/// namespace every time. Exports of an evaluated module never change, so the lookup is
 		/// cached (also caching the “not exported” case, which is the most frequent one).
