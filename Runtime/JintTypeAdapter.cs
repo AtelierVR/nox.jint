@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -22,11 +23,94 @@ using NoxLogger = Nox.CCK.Utils.Logger;
 
 namespace Nox.Jint.Runtime {
 	public static class JintTypeAdapter {
+		/// <summary>JS facade of one .NET instance, for one engine and one scripting context.</summary>
+		private sealed class Facade {
+			public JintEngine Engine;
+			public IJintScriptingContext Context;
+			public ObjectInstance Object;
+		}
+
+		/// <summary>
+		/// Facades already built, weak-keyed on the .NET instance.
+		/// <para>
+		/// A script reads the same values on every frame (<c>players.all</c>, an entity, a nameplate)
+		/// and each read converted the .NET instance again: building a facade allocates a JS object,
+		/// a <c>ClrFunction</c> and a descriptor per binding, which made the conversion the largest
+		/// allocation source of the frame (60 KB per frame from the world scripts alone). The facade
+		/// reads its values through getters, so the same object can be handed back every time.
+		/// </para>
+		/// <para>
+		/// The value is only reachable through the key, so the entry dies with the instance; entries
+		/// of a replaced engine are dropped by <see cref="ClearInstanceCache"/>.
+		/// </para>
+		/// </summary>
+		private static readonly ConditionalWeakTable<object, List<Facade>> Facades = new();
+
+		/// <summary>Drops every facade built for <paramref name="engine"/> (it is being replaced/disposed).</summary>
+		public static void ClearInstanceCache(JintEngine engine) {
+			var keys = new List<object>();
+
+			foreach (var entry in Facades)
+				for (var i = 0; i < entry.Value.Count; i++)
+					if (ReferenceEquals(entry.Value[i].Engine, engine)) {
+						keys.Add(entry.Key);
+						break;
+					}
+
+			for (var i = 0; i < keys.Count; i++)
+				Facades.Remove(keys[i]);
+		}
+
+		private static bool TryGetFacade(JintEngine engine, IJintScriptingContext ctx, object instance, out ObjectInstance obj) {
+			obj = null;
+
+			if (!Facades.TryGetValue(instance, out var list))
+				return false;
+
+			for (var i = 0; i < list.Count; i++) {
+				var facade = list[i];
+				if (!ReferenceEquals(facade.Engine, engine) || !ReferenceEquals(facade.Context, ctx))
+					continue;
+
+				obj = facade.Object;
+				return true;
+			}
+
+			return false;
+		}
+
+		private static void StoreFacade(JintEngine engine, IJintScriptingContext ctx, object instance, ObjectInstance obj)
+			=> Facades.GetOrCreateValue(instance).Add(new Facade {
+				Engine = engine,
+				Context = ctx,
+				Object = obj
+			});
+
 		public static ObjectInstance BuildInstance(
-			JintEngine              engine,
+			JintEngine engine,
 			IScriptingTypeConverter converter,
-			object                  instance,
-			IJintScriptingContext   ctx
+			object instance,
+			IJintScriptingContext ctx
+		) {
+			// A value type is copied on each boxing, there is no stable instance to key the facade on.
+			var cacheable = instance != null && !instance.GetType().IsValueType;
+
+			if (cacheable && TryGetFacade(engine, ctx, instance, out var cached))
+				return cached;
+
+			var obj = BuildInstanceUncached(engine, converter, instance, ctx);
+
+			if (cacheable)
+				StoreFacade(engine, ctx, instance, obj);
+
+			return obj;
+		}
+
+		private static ObjectInstance BuildInstanceUncached(
+			JintEngine engine,
+			IScriptingTypeConverter converter,
+			object instance,
+			IJintScriptingContext ctx
 		) {
 			var obj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
 			obj.DefineOwnProperty("Name", new PropertyDescriptor(converter.HandledType.Name, writable: false, enumerable: false, configurable: false));
@@ -64,7 +148,7 @@ namespace Nox.Jint.Runtime {
 						}
 						case IScriptingTypeAsyncMethod method: {
 							var fn = new ClrFunction(engine, name, (_, args) => {
-								var          nativeArgs = ConvertArgs(args);
+								var nativeArgs = ConvertArgs(args);
 								UniTask<object> task;
 								try { task = method.Handler(ctx, instance, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
@@ -78,33 +162,33 @@ namespace Nox.Jint.Runtime {
 						case IScriptingTypeEventDefinition evt: {
 							var eventName = binding.Name.Resolve(NameResolver.camelCaseStyle);
 							events[eventName] = evt;
-							
+
 							// Create getter/setter for the event property that returns an object with on/off/once/emit methods
 							var getter = new ClrFunction(engine, "get", (thisObj, _) => {
 								var eventObj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
 								// Built once per event object instead of on every event: building the
 								// wrapper allocates the whole JS facade of the .NET instance.
 								var jsThis = ToValue(engine, instance, ctx);
-								
+
 								// on(...) method
 								var onFn = new ClrFunction(engine, "on", (_, args) => {
 									if (args.Length == 0 || !args[0].IsCallable())
 										return JsValue.Undefined;
-									
+
 									evt.AddHandler(ctx, instance, (callbackArgs) => {
 										var jsArgs = ToJsArgs(engine, callbackArgs, ctx);
 										args[0].Call(jsThis, jsArgs);
 									});
-									
+
 									return JsValue.Undefined;
 								});
-								
+
 								// off(...) method
 								var offFn = new ClrFunction(engine, "off", (_, args) => {
 									evt.RemoveHandler(ctx, instance, null);
 									return JsValue.Undefined;
 								});
-								
+
 								// once(...) method
 								var onceFn = new ClrFunction(engine, "once", (_, args) => {
 									if (args.Length == 0 || !args[0].IsCallable())
@@ -122,13 +206,13 @@ namespace Nox.Jint.Runtime {
 									evt.AddHandler(ctx, instance, onceAction);
 									return JsValue.Undefined;
 								});
-								
+
 								var emitFn = new ClrFunction(engine, "emit", (_, args) => {
 									var nativeArgs = ConvertArgs(args);
 									evt.Emit(ctx, instance, nativeArgs);
 									return JsValue.Undefined;
 								});
-									
+
 								eventObj.Set("on", onFn, true);
 								eventObj.Set("off", offFn, true);
 								eventObj.Set("once", onceFn, true);
@@ -136,7 +220,7 @@ namespace Nox.Jint.Runtime {
 
 								return eventObj;
 							});
-							
+
 							obj.DefineOwnProperty(eventName, new GetSetPropertyDescriptor(getter, null, enumerable: true, configurable: true));
 							break;
 						}
@@ -235,7 +319,7 @@ namespace Nox.Jint.Runtime {
 						}
 						case IScriptingSyncMethodDefinition method: {
 							var name = binding.Name.Resolve(NameResolver.camelCaseStyle);
-							var fn   = new ClrFunction(engine, name, (_, args) => {
+							var fn = new ClrFunction(engine, name, (_, args) => {
 								var nativeArgs = ConvertArgs(args);
 								try { return ToValue(engine, method.Handler(ctx, nativeArgs), ctx); } catch (Exception e) {
 									NoxLogger.LogError($"{module.Id.Resolve(NameResolver.snake_case_style)}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
@@ -248,8 +332,8 @@ namespace Nox.Jint.Runtime {
 						}
 						case IScriptingAsyncMethodDefinition method: {
 							var name = binding.Name.Resolve(NameResolver.camelCaseStyle);
-							var fn   = new ClrFunction(engine, name, (_, args) => {
-								var          nativeArgs = ConvertArgs(args);
+							var fn = new ClrFunction(engine, name, (_, args) => {
+								var nativeArgs = ConvertArgs(args);
 								UniTask<object> task;
 								try { task = method.Handler(ctx, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{module.Id.Resolve(NameResolver.snake_case_style)}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
@@ -262,7 +346,7 @@ namespace Nox.Jint.Runtime {
 							break;
 						}
 						case IScriptingTypeConverterDefinition typeDef: {
-							var name    = binding.Name.Resolve(NameResolver.PascalCaseStyle);
+							var name = binding.Name.Resolve(NameResolver.PascalCaseStyle);
 							var typeObj = BuildType(engine, typeDef.Converter, ctx);
 							builder.ExportValue(name, typeObj);
 							ns.Set(name, typeObj, true);
@@ -321,7 +405,7 @@ namespace Nox.Jint.Runtime {
 						}
 						case IScriptingTypeAsyncMethod method: {
 							var asyncFn = new ClrFunction(engine, name, (_, args) => {
-								var          nativeArgs = ConvertArgs(args);
+								var nativeArgs = ConvertArgs(args);
 								UniTask<object> task;
 								try { task = method.Handler(ctx, null, nativeArgs); } catch (Exception e) {
 									NoxLogger.LogError($"{converter.HandledType.Name}.{name}: {e.Message}", tag: nameof(JintTypeAdapter));
@@ -384,26 +468,26 @@ namespace Nox.Jint.Runtime {
 
 		public static JsValue ToValue(JintEngine engine, object value, IJintScriptingContext context = null)
 			=> value switch {
-				null                                                  => JsValue.Null,
-				bool b                                                => b ? JsBoolean.True : JsBoolean.False,
+				null => JsValue.Null,
+				bool b => b ? JsBoolean.True : JsBoolean.False,
 
-				JsValue v                                             => v,
-				Exception ex                                          => ToJsError(engine, ex),
-				JObject jo                                            => ToJsonObject(engine, jo, context),
-				JArray ja                                             => ToJsonArray(engine, ja, context),
-				JValue jv                                             => ToValue(engine, jv.Value, context),
-				JToken jt                                             => ToValue(engine, jt.ToString(), context),
+				JsValue v => v,
+				Exception ex => ToJsError(engine, ex),
+				JObject jo => ToJsonObject(engine, jo, context),
+				JArray ja => ToJsonArray(engine, ja, context),
+				JValue jv => ToValue(engine, jv.Value, context),
+				JToken jt => ToValue(engine, jt.ToString(), context),
 
-				Task<object> { IsCompleted: true } t                  => (t.IsFaulted || t.IsCanceled) ? JsValue.Null : ToValue(engine, t.GetAwaiter().GetResult(), context),
-				Task<object> t                                        => ToPromise(engine, t.AsUniTask(), context),
+				Task<object> { IsCompleted: true } t => (t.IsFaulted || t.IsCanceled) ? JsValue.Null : ToValue(engine, t.GetAwaiter().GetResult(), context),
+				Task<object> t => ToPromise(engine, t.AsUniTask(), context),
 				UniTask<object> { Status: UniTaskStatus.Succeeded } t => ToValue(engine, t.GetAwaiter().GetResult(), context),
-				UniTask<object> t                                     => ToPromise(engine, t, context),
+				UniTask<object> t => ToPromise(engine, t, context),
 
-				_ when context != null                                => ToValueViaContext(engine, value, context),
-				_ when value.GetType().IsArray                        => ToArray(engine, (Array)value, context),
-				_                                                     => Fallback(engine, value, context)
+				_ when context != null => ToValueViaContext(engine, value, context),
+				_ when value.GetType().IsArray => ToArray(engine, (Array)value, context),
+				_ => Fallback(engine, value, context)
 			};
-		
+
 		/// <summary>
 		/// Converts a .NET exception into a JS Error instance. If the exception is a
 		/// <see cref="JavaScriptException"/> (i.e. Jint re-throwing a script-side error we caught earlier),
@@ -452,7 +536,7 @@ namespace Nox.Jint.Runtime {
 
 			var converted = context.ToScript(value);
 			if (converted is JsValue jv) return jv;
-			if (!ReferenceEquals(converted, value)) 
+			if (!ReferenceEquals(converted, value))
 				return ToValue(engine, converted, null);
 
 			if (t.IsEnum || t.IsValueType)
@@ -473,17 +557,16 @@ namespace Nox.Jint.Runtime {
 		}
 
 		private static ObjectInstance BuildReflective(JintEngine engine, object instance, IJintScriptingContext ctx) {
-			var obj  = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
+			var obj = engine.Intrinsics.Object.Construct(Array.Empty<JsValue>(), engine.Intrinsics.Object);
 			var type = instance.GetType();
 
 			foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)) {
 				if (!prop.CanRead || prop.GetIndexParameters().Length > 0)
 					continue;
-				var p    = prop;
+				var p = prop;
 				var jsName = new NameResolver(p.Name).Resolve(NameResolver.camelCaseStyle);
 				var getter = new ClrFunction(engine, "get", (_, _2) => {
-					try   { return ToValue(engine, p.GetValue(instance), ctx); }
-					catch { return JsValue.Undefined; }
+					try { return ToValue(engine, p.GetValue(instance), ctx); } catch { return JsValue.Undefined; }
 				});
 				if (prop.CanWrite) {
 					var setter = new ClrFunction(engine, "set", (_, args) => {
@@ -511,11 +594,11 @@ namespace Nox.Jint.Runtime {
 				var jsMethodName = new NameResolver(method.Name).Resolve(NameResolver.camelCaseStyle);
 				if (!addedMethods.Add(jsMethodName))
 					continue;
-				var m  = method;
+				var m = method;
 				var ps = parameters;
 				var fn = new ClrFunction(engine, jsMethodName, (_, args) => {
 					try {
-						var native    = ConvertArgs(args);
+						var native = ConvertArgs(args);
 						var typedArgs = new object[ps.Length];
 						for (var i = 0; i < ps.Length; i++) {
 							var raw = i < native.Length ? native[i] : null;
@@ -619,30 +702,30 @@ namespace Nox.Jint.Runtime {
 
 
 		public static object FromValue(JsValue value) => value switch {
-		    _ when value.IsNull() || value.IsUndefined() => null,
-		    _ when value.IsCallable()                    => new Func<object[], object>(args => {
-		        var engine = value.AsObject().Engine;
-		        var jsArgs = ToJsArgs(engine, args, null);
-		        return FromValue(value.Call(jsArgs));
-		    }),
-		    _ when !value.IsObject()                     => value.ToObject(),
+			_ when value.IsNull() || value.IsUndefined() => null,
+			_ when value.IsCallable() => new Func<object[], object>(args => {
+				var engine = value.AsObject().Engine;
+				var jsArgs = ToJsArgs(engine, args, null);
+				return FromValue(value.Call(jsArgs));
+			}),
+			_ when !value.IsObject() => value.ToObject(),
 
-		    ArrayInstance arr     => arr.ToArray().Select(FromValue).ToArray(),
-		    ObjectWrapper wrapper => wrapper.Target,
-		    JsError jsError       => FromJsError(jsError),
+			ArrayInstance arr => arr.ToArray().Select(FromValue).ToArray(),
+			ObjectWrapper wrapper => wrapper.Target,
+			JsError jsError => FromJsError(jsError),
 
-		    ObjectInstance obj when !obj.Get("__target").IsUndefined() && !obj.Get("__target").IsNull() 
-		        => FromValue(obj.Get("__target")),
+			ObjectInstance obj when !obj.Get("__target").IsUndefined() && !obj.Get("__target").IsNull()
+				=> FromValue(obj.Get("__target")),
 
 			// Intercepte les objets littéraux JS anonymes sans déclencher le warning de fallback
-    		ObjectInstance obj => new PropertyDictionary(obj.Engine, obj),
+			ObjectInstance obj => new PropertyDictionary(obj.Engine, obj),
 
-		    _ => FallbackFromValue(value)
+			_ => FallbackFromValue(value)
 		};
 
 		private static object FallbackFromValue(JsValue value) {
-		    NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
-		    return new PropertyDictionary(value.AsObject().Engine, value.AsObject());
+			NoxLogger.LogWarning($"{value} ({value.GetType().FullName}) is not compatible, this may cause incompatibilities.", tag: nameof(JintTypeAdapter));
+			return new PropertyDictionary(value.AsObject().Engine, value.AsObject());
 		}
 
 		/// <summary>
@@ -655,9 +738,9 @@ namespace Nox.Jint.Runtime {
 			if (wrapped?.IsUndefined() == false && !wrapped.IsNull() && FromValue(wrapped) is Exception original)
 				return original;
 
-			var name    = jsError.Get("name")?.ToString() ?? "Error";
+			var name = jsError.Get("name")?.ToString() ?? "Error";
 			var message = jsError.Get("message")?.ToString() ?? string.Empty;
-			var stack   = jsError.Get("stack")?.ToString();
+			var stack = jsError.Get("stack")?.ToString();
 			return new JsScriptException(name, message, stack);
 		}
 	}
@@ -672,7 +755,7 @@ namespace Nox.Jint.Runtime {
 		public string JsStack { get; }
 
 		public JsScriptException(string jsName, string message, string jsStack) : base(message) {
-			JsName  = jsName;
+			JsName = jsName;
 			JsStack = jsStack;
 		}
 

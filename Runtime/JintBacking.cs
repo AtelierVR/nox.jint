@@ -102,6 +102,8 @@ namespace Nox.Jint.Runtime {
 
 			NoxLogger.Log("Prepare");
 			_methodCache.Clear();
+			if (Engine != null)
+				JintTypeAdapter.ClearInstanceCache(Engine);
 			Engine = new Engine(
 				ctx => {
 					ctx.LimitMemory(4_194_304);
@@ -168,6 +170,7 @@ namespace Nox.Jint.Runtime {
 				NoxLogger.LogError($"Error executing onDestroy function: {e.Message}", this);
 			}
 
+			JintTypeAdapter.ClearInstanceCache(Engine);
 			Engine.Dispose();
 			Engine           = null;
 			ExecutionContext = null;
